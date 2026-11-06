@@ -541,6 +541,53 @@ defmodule Exqlite.Sqlite3 do
   end
 
   @doc """
+  Send preupdate notifications with full row data to a process.
+
+  Before each insert, update, or delete is applied on the given connection, a
+  message is sent to the pid provided as the second argument carrying both
+  the old and the new row, which the update hook cannot provide.
+
+  The message is of the form: `{action, db_name, table, row_id, old_row, new_row}`,
+  where:
+
+    * `action` is one of `:insert`, `:update` or `:delete`
+    * `db_name` is a string representing the database name where the change
+      took place (`"main"`, `"temp"`, or the name of an attached database)
+    * `table` is a string representing the table name where the change took
+      place
+    * `row_id` is an integer representing the row id assigned by SQLite. It
+      is always `0` for `WITHOUT ROWID` tables and cannot identify a row there
+    * `old_row` is the complete row before the change, or `nil` for inserts
+    * `new_row` is the complete row after the change, or `nil` for deletes
+
+  Passing `nil` as the second argument unregisters the hook.
+
+  ## Restrictions
+
+    * The hook only fires for changes to real tables. Changes to virtual
+      tables and to system tables such as `sqlite_sequence` or
+      `sqlite_stat1` are not reported.
+    * Changes performed by triggers and foreign key actions fire additional
+      preupdate events for the modified tables.
+    * Only one pid can receive the notifications for a given connection at a
+      time. If this function is called multiple times for the same connection,
+      only the last pid will receive the notifications.
+    * The preupdate hook requires SQLite compiled with
+      `SQLITE_ENABLE_PREUPDATE_HOOK`, which the vendored build enables. When
+      Exqlite is built against a system SQLite without it
+      (`EXQLITE_USE_SYSTEM=1`, unless the flag is passed via
+      `EXQLITE_SYSTEM_CFLAGS`), this function returns
+      `{:error, :preupdate_hook_not_supported}`.
+
+  See [`sqlite3_preupdate_hook`](https://www.sqlite.org/c3ref/preupdate_hook.html)
+  for more details.
+  """
+  @spec set_preupdate_hook(db(), pid() | nil) :: :ok | {:error, reason()}
+  def set_preupdate_hook(conn, pid) do
+    Sqlite3NIF.set_preupdate_hook(conn, pid)
+  end
+
+  @doc """
   Set an authorizer that denies specific SQL operations.
 
   Accepts a list of action atoms to deny. Any SQL statement that triggers a

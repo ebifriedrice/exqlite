@@ -928,6 +928,79 @@ defmodule Exqlite.Sqlite3Test do
     end
   end
 
+  describe "set_preupdate_hook/2" do
+    setup do
+      {:ok, conn} = Sqlite3.open(":memory:")
+
+      :ok =
+        Sqlite3.execute(
+          conn,
+          "create table test(id integer primary key, num integer, name text)"
+        )
+
+      on_exit(fn ->
+        Sqlite3.close(conn)
+      end)
+
+      [conn: conn]
+    end
+
+    test "sends old and new rows for insert, update, and delete", context do
+      :ok = Sqlite3.set_preupdate_hook(context.conn, self())
+
+      :ok =
+        Sqlite3.execute(
+          context.conn,
+          "insert into test(id, num, name) values (1, 10, 'a')"
+        )
+
+      :ok = Sqlite3.execute(context.conn, "update test set num = 11 where id = 1")
+      :ok = Sqlite3.execute(context.conn, "delete from test where id = 1")
+
+      assert_receive {:insert, "main", "test", 1, nil, [1, 10, "a"]}, 1000
+      assert_receive {:update, "main", "test", 1, [1, 10, "a"], [1, 11, "a"]}, 1000
+      assert_receive {:delete, "main", "test", 1, [1, 11, "a"], nil}, 1000
+    end
+
+    test "handles nil and float values in rows", context do
+      :ok = Sqlite3.set_preupdate_hook(context.conn, self())
+
+      :ok =
+        Sqlite3.execute(
+          context.conn,
+          "insert into test(id, num, name) values (1, 1.5, NULL)"
+        )
+
+      assert_receive {:insert, "main", "test", 1, nil, [1, 1.5, nil]}, 1000
+    end
+
+    test "reports row id 0 for WITHOUT ROWID tables", context do
+      :ok =
+        Sqlite3.execute(
+          context.conn,
+          "create table stuff(key text primary key, val integer) without rowid"
+        )
+
+      :ok = Sqlite3.set_preupdate_hook(context.conn, self())
+      :ok = Sqlite3.execute(context.conn, "insert into stuff(key, val) values ('a', 1)")
+
+      assert_receive {:insert, "main", "stuff", 0, nil, ["a", 1]}, 1000
+    end
+
+    test "passing nil unregisters the hook", context do
+      :ok = Sqlite3.set_preupdate_hook(context.conn, self())
+      :ok = Sqlite3.set_preupdate_hook(context.conn, nil)
+
+      :ok =
+        Sqlite3.execute(
+          context.conn,
+          "insert into test(id, num, name) values (1, 10, 'a')"
+        )
+
+      refute_receive {:insert, "main", "test", 1, nil, _}, 100
+    end
+  end
+
   describe "set_authorizer/2" do
     setup do
       {:ok, path} = Temp.path()

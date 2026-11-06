@@ -43,6 +43,9 @@ static ERL_NIF_TERM am_update;
 static ERL_NIF_TERM am_invalid_pid;
 static ERL_NIF_TERM am_committed;
 static ERL_NIF_TERM am_rolled_back;
+#ifndef SQLITE_ENABLE_PREUPDATE_HOOK
+static ERL_NIF_TERM am_preupdate_hook_not_supported;
+#endif
 static ERL_NIF_TERM am_log;
 
 static int erlang_allocator_enabled = 0;
@@ -85,6 +88,7 @@ typedef struct connection
     ErlNifPid update_hook_pid;
     ErlNifPid commit_hook_pid;
     ErlNifPid rollback_hook_pid;
+    ErlNifPid preupdate_hook_pid;
     int authorizer_deny[AUTHORIZER_DENY_SIZE];
 
     // Custom busy handler state
@@ -416,6 +420,9 @@ connection_clear_hooks(connection_t* conn)
 {
     sqlite3_commit_hook(conn->db, NULL, NULL);
     sqlite3_rollback_hook(conn->db, NULL, NULL);
+#ifdef SQLITE_ENABLE_PREUPDATE_HOOK
+    sqlite3_preupdate_hook(conn->db, NULL, NULL);
+#endif
 }
 
 static inline void
@@ -1688,7 +1695,11 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     am_invalid_pid                         = enif_make_atom(env, "invalid_pid");
     am_committed                           = enif_make_atom(env, "committed");
     am_rolled_back                         = enif_make_atom(env, "rolled_back");
-    am_log                                 = enif_make_atom(env, "log");
+#ifndef SQLITE_ENABLE_PREUPDATE_HOOK
+    am_preupdate_hook_not_supported =
+      enif_make_atom(env, "preupdate_hook_not_supported");
+#endif
+    am_log = enif_make_atom(env, "log");
 
     ERL_NIF_TERM disable_erlang_allocator;
     if (!enif_get_map_value(env, info, enif_make_atom(env, "disable_erlang_allocator"), &disable_erlang_allocator)) {
@@ -1987,6 +1998,200 @@ exqlite_set_rollback_hook(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 
     return am_ok;
 }
+
+///
+/// Preupdate Notifications
+///
+
+#ifdef SQLITE_ENABLE_PREUPDATE_HOOK
+
+static ERL_NIF_TERM
+make_preupdate_cell(ErlNifEnv* env, sqlite3_value* value)
+{
+    switch (sqlite3_value_type(value)) {
+        case SQLITE_INTEGER:
+            return enif_make_int64(env, sqlite3_value_int64(value));
+
+        case SQLITE_FLOAT:
+            return enif_make_double(env, sqlite3_value_double(value));
+
+        case SQLITE_NULL:
+            return am_nil;
+
+        case SQLITE_BLOB:
+            return make_binary(
+              env, sqlite3_value_blob(value), sqlite3_value_bytes(value));
+
+        case SQLITE_TEXT:
+            return make_binary(
+              env, sqlite3_value_text(value), sqlite3_value_bytes(value));
+
+        default:
+            return am_nil;
+    }
+}
+
+// Builds a full row of old or new values. Returns 0 only when an allocation
+// or accessor fails, in which case the event is dropped rather than sent
+// half-built.
+static int
+make_preupdate_row(ErlNifEnv* env, sqlite3* db, int use_new, ERL_NIF_TERM* out)
+{
+    int count = sqlite3_preupdate_count(db);
+
+    if (count < 1) {
+        *out = enif_make_list(env, 0);
+        return 1;
+    }
+
+    ERL_NIF_TERM* cells = enif_alloc(sizeof(ERL_NIF_TERM) * count);
+    if (!cells) {
+        return 0;
+    }
+
+    for (int i = 0; i < count; i++) {
+        sqlite3_value* value = NULL;
+        int rc               = use_new ? sqlite3_preupdate_new(db, i, &value)
+                                       : sqlite3_preupdate_old(db, i, &value);
+        if (rc != SQLITE_OK || !value) {
+            enif_free(cells);
+            return 0;
+        }
+        cells[i] = make_preupdate_cell(env, value);
+    }
+
+    *out = enif_make_list_from_array(env, cells, count);
+    enif_free(cells);
+    return 1;
+}
+
+// Runs inside the SQLite call about to change a row, on the dirty scheduler
+// thread of the process that issued it. The old/new row accessors are only
+// valid from within this callback.
+static void
+preupdate_callback(
+  void* arg,
+  sqlite3* db,
+  int op,
+  char const* zDb,
+  char const* zTable,
+  sqlite3_int64 iKey1,
+  sqlite3_int64 iKey2)
+{
+    connection_t* conn = (connection_t*)arg;
+
+    if (!conn) {
+        return;
+    }
+
+    ErlNifEnv* msg_env = enif_alloc_env();
+    if (!msg_env) {
+        return;
+    }
+
+    ERL_NIF_TERM change_type;
+    ERL_NIF_TERM rowid;
+    ERL_NIF_TERM old_row = am_nil;
+    ERL_NIF_TERM new_row = am_nil;
+    int ok               = 1;
+
+    switch (op) {
+        case SQLITE_INSERT:
+            change_type = am_insert;
+            rowid       = enif_make_int64(msg_env, iKey2);
+            break;
+        case SQLITE_DELETE:
+            change_type = am_delete;
+            rowid       = enif_make_int64(msg_env, iKey1);
+            break;
+        case SQLITE_UPDATE:
+            change_type = am_update;
+            rowid       = enif_make_int64(msg_env, iKey2);
+            break;
+        default:
+            enif_free_env(msg_env);
+            return;
+    }
+
+    if (op != SQLITE_INSERT) {
+        ok = make_preupdate_row(msg_env, db, 0, &old_row);
+    }
+    if (ok && op != SQLITE_DELETE) {
+        ok = make_preupdate_row(msg_env, db, 1, &new_row);
+    }
+
+    if (ok) {
+        ERL_NIF_TERM database = make_binary(msg_env, zDb, strlen(zDb));
+        ERL_NIF_TERM table    = make_binary(msg_env, zTable, strlen(zTable));
+        ERL_NIF_TERM msg      = enif_make_tuple6(
+          msg_env, change_type, database, table, rowid, old_row, new_row);
+
+        if (!enif_send(NULL, &conn->preupdate_hook_pid, msg_env, msg)) {
+            sqlite3_preupdate_hook(conn->db, NULL, NULL);
+        }
+    }
+
+    enif_free_env(msg_env);
+}
+
+// set_preupdate_hook(conn, pid) -> :ok | {:error, reason()}
+// Passing nil unregisters the hook.
+ERL_NIF_TERM
+exqlite_set_preupdate_hook(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    assert(env);
+    connection_t* conn = NULL;
+
+    if (argc != 2) {
+        return enif_make_badarg(env);
+    }
+
+    if (!enif_get_resource(env, argv[0], connection_type, (void**)&conn)) {
+        return make_error_tuple(env, am_invalid_connection);
+    }
+
+    connection_acquire_lock(conn);
+
+    if (conn->db == NULL) {
+        connection_release_lock(conn);
+        return make_error_tuple(env, am_connection_closed);
+    }
+
+    if (enif_is_identical(argv[1], am_nil)) {
+        sqlite3_preupdate_hook(conn->db, NULL, NULL);
+    } else if (enif_get_local_pid(env, argv[1], &conn->preupdate_hook_pid)) {
+        sqlite3_preupdate_hook(conn->db, preupdate_callback, conn);
+    } else {
+        connection_release_lock(conn);
+        return make_error_tuple(env, am_invalid_pid);
+    }
+
+    connection_release_lock(conn);
+
+    return am_ok;
+}
+
+#else
+
+// System SQLite builds without SQLITE_ENABLE_PREUPDATE_HOOK keep the entry
+// point so callers get an explicit error instead of an undef.
+ERL_NIF_TERM
+exqlite_set_preupdate_hook(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    connection_t* conn = NULL;
+
+    if (argc != 2) {
+        return enif_make_badarg(env);
+    }
+
+    if (!enif_get_resource(env, argv[0], connection_type, (void**)&conn)) {
+        return make_error_tuple(env, am_invalid_connection);
+    }
+
+    return make_error_tuple(env, am_preupdate_hook_not_supported);
+}
+
+#endif
 
 //
 // Authorizer
@@ -2470,6 +2675,7 @@ static ErlNifFunc nif_funcs[] = {
   {"set_update_hook", 2, exqlite_set_update_hook, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"set_commit_hook", 2, exqlite_set_commit_hook, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"set_rollback_hook", 2, exqlite_set_rollback_hook, ERL_NIF_DIRTY_JOB_IO_BOUND},
+  {"set_preupdate_hook", 2, exqlite_set_preupdate_hook, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"set_authorizer", 2, exqlite_set_authorizer, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"set_log_hook", 1, exqlite_set_log_hook, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"interrupt", 1, exqlite_interrupt, ERL_NIF_DIRTY_JOB_IO_BOUND},
