@@ -39,12 +39,26 @@ jobs:
           mix deps.compile
 
       # The precompile workflows upload their tarballs to this tag's GitHub
-      # release as their jobs finish. checksum --all only succeeds once every
-      # configured target has an artifact up, so retry until then.
+      # release as their jobs finish. checksum --all only logs 404s for
+      # targets that are not up yet and still exits zero, so the real gate
+      # is verifying afterwards that every configured target made it into
+      # checksum.exs.
       - name: Wait for precompiled artifacts and write checksum.exs
         run: |
           for attempt in $(seq 1 50); do
-            if mix elixir_make.checksum --all; then
+            mix elixir_make.checksum --all >/dev/null 2>&1
+            if mix run --no-start -e '
+              expected = CCPrecompiler.all_supported_targets(:fetch)
+              {checksums, _} = Code.eval_file("checksum.exs")
+              names = Map.keys(checksums)
+              missing = Enum.reject(expected, fn t ->
+                Enum.any?(names, &String.contains?(&1, "-" <> t <> "-"))
+              end)
+              if missing != [] do
+                IO.puts(:stderr, "missing artifacts: #{Enum.join(missing, ", ")}")
+                System.halt(1)
+              end
+            '; then
               echo "all precompiled artifacts are available"
               exit 0
             fi
