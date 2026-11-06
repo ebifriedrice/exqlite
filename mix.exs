@@ -14,7 +14,7 @@ defmodule Exqlite.MixProject do
       make_force_build: Application.get_env(:exqlite, :force_build, false),
       make_precompiler: make_precompiler(),
       make_precompiler_url:
-        "https://github.com/elixir-sqlite/exqlite/releases/download/v#{@version}/@{artefact_filename}",
+        "https://github.com/ebifriedrice/exqlite/releases/download/v#{@version}/@{artefact_filename}",
       make_precompiler_filename: "sqlite3_nif",
       make_precompiler_nif_versions: make_precompiler_nif_versions(),
       make_env: Application.get_env(:exqlite, :make_env, %{}),
