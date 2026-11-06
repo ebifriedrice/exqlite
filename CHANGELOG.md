@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-- changed: Stop requesting OTP 24 (NIF 2.16) precompiled artifacts. Elixir 1.17 requires OTP 25+, and those artifacts are not published.
+## v0.44.0
+
+- added: `Exqlite.Sqlite3.set_commit_hook/2` and `Exqlite.Sqlite3.set_rollback_hook/2` to receive `:committed` / `:rolled_back` notifications for a connection's transactions.
+- added: `Exqlite.Sqlite3.set_preupdate_hook/2` to receive `{action, db_name, table, row_id, old_row, new_row}` messages with complete row data before each insert, update, or delete. The vendored SQLite is now built with `SQLITE_ENABLE_PREUPDATE_HOOK`.
+- changed: Dropped `x86_64-apple-darwin` from the precompiled NIF targets; Intel macOS falls back to compiling the NIF from source.
+- changed: Precompiled NIFs are now served from this repository's releases.
+- fixed: Stop requesting OTP 24 (NIF 2.16) precompiled artifacts. Elixir 1.17 requires OTP 25+, and those artifacts are not published.
 
 ## v0.43.0
 
