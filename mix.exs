@@ -149,7 +149,13 @@ defmodule Exqlite.MixProject do
           "armv7a-linux-androideabi" => android_compilers("armv7a-linux-androideabi")
         },
         {:unix, :darwin} => %{
-          :include_default_ones => true
+          # x86_64-apple-darwin is deliberately not listed: Intel macs
+          # compile from source. Keeping :include_default_ones out entirely
+          # matters — cc_precompiler expands that key back to the default
+          # darwin triples when fetching checksums, which would require an
+          # Intel artifact that no job builds.
+          "aarch64-apple-darwin" =>
+            {"gcc", "g++", "<%= cc %> -arch arm64", "<%= cxx %> -arch arm64"}
         },
         {:win32, :nt} => %{
           :include_default_ones => true

@@ -112,7 +112,7 @@ make c-check
 
 The project uses `cc_precompiler` to provide precompiled NIF binaries for common platforms. The precompiler configuration is in `mix.exs` and supports:
 - Linux (x86_64, aarch64, riscv64 musl)
-- macOS (universal)
+- macOS (aarch64; Intel macs compile from source)
 - Windows
 - Android (aarch64, armv7a)
 
