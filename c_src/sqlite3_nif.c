@@ -41,6 +41,7 @@ static ERL_NIF_TERM am_insert;
 static ERL_NIF_TERM am_delete;
 static ERL_NIF_TERM am_update;
 static ERL_NIF_TERM am_invalid_pid;
+static ERL_NIF_TERM am_committed;
 static ERL_NIF_TERM am_log;
 
 static int erlang_allocator_enabled = 0;
@@ -81,6 +82,7 @@ typedef struct connection
     deferred_finalize_t* finalize_head;
 
     ErlNifPid update_hook_pid;
+    ErlNifPid commit_hook_pid;
     int authorizer_deny[AUTHORIZER_DENY_SIZE];
 
     // Custom busy handler state
@@ -404,6 +406,15 @@ connection_defer_finalize(connection_t* conn, deferred_finalize_t* slot)
     enif_mutex_unlock(conn->finalize_mutex);
 }
 
+// Unregister notification hooks before close or the rollback that close
+// performs on an open transaction, so a connection being torn down never
+// sends notifications for it. Caller holds conn->mutex and conn->db != NULL.
+static void
+connection_clear_hooks(connection_t* conn)
+{
+    sqlite3_commit_hook(conn->db, NULL, NULL);
+}
+
 static inline void
 connection_configure_progress_handler(connection_t* conn)
 {
@@ -645,6 +656,8 @@ exqlite_close(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         connection_release_lock(conn);
         return am_ok;
     }
+
+    connection_clear_hooks(conn);
 
     int autocommit = sqlite3_get_autocommit(conn->db);
     if (autocommit == 0) {
@@ -1549,6 +1562,7 @@ connection_type_destructor(ErlNifEnv* env, void* arg)
     }
 
     if (conn->db) {
+        connection_clear_hooks(conn);
         sqlite3_close_v2(conn->db);
         conn->db = NULL;
     }
@@ -1669,6 +1683,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     am_delete                              = enif_make_atom(env, "delete");
     am_update                              = enif_make_atom(env, "update");
     am_invalid_pid                         = enif_make_atom(env, "invalid_pid");
+    am_committed                           = enif_make_atom(env, "committed");
     am_log                                 = enif_make_atom(env, "log");
 
     ERL_NIF_TERM disable_erlang_allocator;
@@ -1839,6 +1854,70 @@ exqlite_set_update_hook(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     // passed as the first argument to update_callback. This allows us
     // to extract the hook pid and reset the hook if the pid is not alive.
     sqlite3_update_hook(conn->db, update_callback, conn);
+
+    connection_release_lock(conn);
+
+    return am_ok;
+}
+
+///
+/// Commit Notifications
+///
+
+// Runs inside the SQLite call performing the COMMIT, on the dirty scheduler
+// thread of the process that issued it. SQLite turns the commit into a
+// rollback when the callback returns non-zero, but that decision would need
+// a synchronous answer from Erlang that a callback cannot request, so this
+// hook is notification-only and every commit is allowed through.
+static int
+commit_callback(void* arg)
+{
+    connection_t* conn = (connection_t*)arg;
+
+    if (!conn) {
+        return 0;
+    }
+
+    ErlNifEnv* msg_env = enif_alloc_env();
+    if (!enif_send(NULL, &conn->commit_hook_pid, msg_env, am_committed)) {
+        sqlite3_commit_hook(conn->db, NULL, NULL);
+    }
+    enif_free_env(msg_env);
+
+    return 0;
+}
+
+// set_commit_hook(conn, pid) -> :ok | {:error, reason()}
+// Passing nil unregisters the hook.
+ERL_NIF_TERM
+exqlite_set_commit_hook(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    assert(env);
+    connection_t* conn = NULL;
+
+    if (argc != 2) {
+        return enif_make_badarg(env);
+    }
+
+    if (!enif_get_resource(env, argv[0], connection_type, (void**)&conn)) {
+        return make_error_tuple(env, am_invalid_connection);
+    }
+
+    connection_acquire_lock(conn);
+
+    if (conn->db == NULL) {
+        connection_release_lock(conn);
+        return make_error_tuple(env, am_connection_closed);
+    }
+
+    if (enif_is_identical(argv[1], am_nil)) {
+        sqlite3_commit_hook(conn->db, NULL, NULL);
+    } else if (enif_get_local_pid(env, argv[1], &conn->commit_hook_pid)) {
+        sqlite3_commit_hook(conn->db, commit_callback, conn);
+    } else {
+        connection_release_lock(conn);
+        return make_error_tuple(env, am_invalid_pid);
+    }
 
     connection_release_lock(conn);
 
@@ -2325,6 +2404,7 @@ static ErlNifFunc nif_funcs[] = {
   {"release", 2, exqlite_release, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"enable_load_extension", 2, exqlite_enable_load_extension, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"set_update_hook", 2, exqlite_set_update_hook, ERL_NIF_DIRTY_JOB_IO_BOUND},
+  {"set_commit_hook", 2, exqlite_set_commit_hook, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"set_authorizer", 2, exqlite_set_authorizer, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"set_log_hook", 1, exqlite_set_log_hook, ERL_NIF_DIRTY_JOB_IO_BOUND},
   {"interrupt", 1, exqlite_interrupt, ERL_NIF_DIRTY_JOB_IO_BOUND},

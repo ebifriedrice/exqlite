@@ -486,6 +486,36 @@ defmodule Exqlite.Sqlite3 do
   end
 
   @doc """
+  Send commit notifications to a process.
+
+  Each time a transaction is committed on the given connection, the atom
+  `:committed` is sent to the pid provided as the second argument.
+
+  Passing `nil` as the second argument unregisters the hook.
+
+  ## Restrictions
+
+    * This is a notification-only hook. SQLite allows a commit hook to veto a
+      commit (turning it into a rollback), but that requires a synchronous
+      answer that a NIF callback cannot request from the BEAM, so commits are
+      always allowed through. Use `Exqlite.Sqlite3.transaction_status/1` or
+      handle the commit's return value when you need the outcome.
+    * Only one pid can receive the notifications for a given connection at a
+      time. If this function is called multiple times for the same connection,
+      only the last pid will receive the notifications.
+    * Hooks are unregistered when the connection is closed, so closing a
+      connection with an open transaction does not emit notifications for the
+      rollback performed by `close/1`.
+
+  See [`sqlite3_commit_hook`](https://www.sqlite.org/c3ref/commit_hook.html)
+  for more details.
+  """
+  @spec set_commit_hook(db(), pid() | nil) :: :ok | {:error, reason()}
+  def set_commit_hook(conn, pid) do
+    Sqlite3NIF.set_commit_hook(conn, pid)
+  end
+
+  @doc """
   Set an authorizer that denies specific SQL operations.
 
   Accepts a list of action atoms to deny. Any SQL statement that triggers a

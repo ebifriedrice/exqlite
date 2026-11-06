@@ -829,6 +829,55 @@ defmodule Exqlite.Sqlite3Test do
     end
   end
 
+  describe "set_commit_hook/2" do
+    setup do
+      {:ok, conn} = Sqlite3.open(":memory:")
+      :ok = Sqlite3.execute(conn, "create table test(num integer)")
+
+      on_exit(fn ->
+        Sqlite3.close(conn)
+      end)
+
+      [conn: conn]
+    end
+
+    test "sends :committed when a transaction commits", context do
+      :ok = Sqlite3.set_commit_hook(context.conn, self())
+
+      :ok = Sqlite3.execute(context.conn, "begin")
+      :ok = Sqlite3.execute(context.conn, "insert into test(num) values (10)")
+      refute_receive :committed, 100
+
+      :ok = Sqlite3.execute(context.conn, "commit")
+      assert_receive :committed, 1000
+    end
+
+    test "autocommit statements also send :committed", context do
+      :ok = Sqlite3.set_commit_hook(context.conn, self())
+
+      :ok = Sqlite3.execute(context.conn, "insert into test(num) values (10)")
+      assert_receive :committed, 1000
+    end
+
+    test "does not send :committed on rollback", context do
+      :ok = Sqlite3.set_commit_hook(context.conn, self())
+
+      :ok = Sqlite3.execute(context.conn, "begin")
+      :ok = Sqlite3.execute(context.conn, "insert into test(num) values (10)")
+      :ok = Sqlite3.execute(context.conn, "rollback")
+      refute_receive :committed, 100
+    end
+
+    test "passing nil unregisters the hook", context do
+      :ok = Sqlite3.set_commit_hook(context.conn, self())
+      :ok = Sqlite3.set_commit_hook(context.conn, nil)
+
+      :ok = Sqlite3.execute(context.conn, "begin")
+      :ok = Sqlite3.execute(context.conn, "commit")
+      refute_receive :committed, 100
+    end
+  end
+
   describe "set_authorizer/2" do
     setup do
       {:ok, path} = Temp.path()
