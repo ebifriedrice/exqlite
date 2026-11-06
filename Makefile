@@ -31,6 +31,9 @@ CFLAGS = -I"$(ERL_INCLUDE)"
 ifeq ($(EXQLITE_USE_SYSTEM),)
 	SRC += c_src/sqlite3.c
 	CFLAGS += -Ic_src
+	# Only the vendored amalgamation is known to carry the preupdate hook
+	# symbols; system builds must opt in via EXQLITE_SYSTEM_CFLAGS.
+	CFLAGS += -DSQLITE_ENABLE_PREUPDATE_HOOK=1
 else
 	ifneq ($(EXQLITE_SYSTEM_LDFLAGS),)
 		LDFLAGS += $(EXQLITE_SYSTEM_LDFLAGS)
