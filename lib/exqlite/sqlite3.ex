@@ -516,6 +516,31 @@ defmodule Exqlite.Sqlite3 do
   end
 
   @doc """
+  Send rollback notifications to a process.
+
+  Each time a transaction is rolled back on the given connection, the atom
+  `:rolled_back` is sent to the pid provided as the second argument.
+
+  Passing `nil` as the second argument unregisters the hook.
+
+  ## Restrictions
+
+    * The rollback performed by `close/1` (or by connection teardown) on an
+      open transaction does not emit a notification, because hooks are
+      unregistered before teardown begins.
+    * Only one pid can receive the notifications for a given connection at a
+      time. If this function is called multiple times for the same connection,
+      only the last pid will receive the notifications.
+
+  See [`sqlite3_rollback_hook`](https://www.sqlite.org/c3ref/commit_hook.html)
+  for more details.
+  """
+  @spec set_rollback_hook(db(), pid() | nil) :: :ok | {:error, reason()}
+  def set_rollback_hook(conn, pid) do
+    Sqlite3NIF.set_rollback_hook(conn, pid)
+  end
+
+  @doc """
   Set an authorizer that denies specific SQL operations.
 
   Accepts a list of action atoms to deny. Any SQL statement that triggers a
