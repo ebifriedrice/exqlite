@@ -1,16 +1,17 @@
 # Exqlite
 
-[![Build Status](https://github.com/elixir-sqlite/exqlite/workflows/CI/badge.svg)](https://github.com/elixir-sqlite/exqlite/actions)
-[![Hex Package](https://img.shields.io/hexpm/v/exqlite.svg)](https://hex.pm/packages/exqlite)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/exqlite)
+[![Build Status](https://github.com/ebifriedrice/exqlite/actions/workflows/ci.yml/badge.svg)](https://github.com/ebifriedrice/exqlite/actions/workflows/ci.yml)
 
 An Elixir SQLite3 library.
 
+This repository is a fork of [exqlite](https://github.com/elixir-sqlite/exqlite).
+It is not published to hex.pm — depend on it directly with git, as shown under
+Installation. On top of upstream it adds SQLite's preupdate, commit, and
+rollback hooks — see
+[Observing data changes and transaction events](#observing-data-changes-and-transaction-events).
+
 If you are looking for the Ecto adapter, take a look at the
 [Ecto SQLite3 library][ecto_sqlite3].
-
-Documentation: https://hexdocs.pm/exqlite
-Package: https://hex.pm/packages/exqlite
 
 ## Contributing
 
@@ -38,13 +39,21 @@ be honest.
 
 ## Installation
 
+Depend on the repository directly:
+
 ```elixir
 defp deps do
   [
-    {:exqlite, "~> 0.27"}
+    {:exqlite,
+     git: "https://github.com/ebifriedrice/exqlite.git", tag: "v0.44.1"}
   ]
 end
 ```
+
+Installing the dependency compiles the SQLite NIF from source, so a C
+compiler toolchain is required; on Windows see
+[guides/windows.md](./guides/windows.md) for setting up the build tools. All
+configuration keeps using `config :exqlite, ...`.
 
 
 ## Configuration
@@ -140,7 +149,7 @@ export EXQLITE_SYSTEM_LDFLAGS=-L/usr/local/lib -lsqlcipher
 Once you have `exqlite` configured, you can use the `:key` option in the database config to enable encryption:
 
 ```elixir
-config :exqlite, key: "super-secret'
+config :exqlite, key: "super-secret"
 ```
 
 ### Disabling the Erlang allocator
@@ -189,6 +198,46 @@ The `Exqlite.Sqlite3` module usage is fairly straight forward.
 # possible to run out of memory or cause a lot of pressure on memory.
 :ok = Exqlite.Sqlite3.release(conn, statement)
 ```
+
+### Observing data changes and transaction events
+
+Each connection can deliver SQLite events as messages to a process you
+choose — usually a `GenServer` that handles them in `handle_info/2`. Pass
+`nil` to any of the functions below to unregister, and note that only one
+listener per connection is notified: registering again replaces the listener.
+
+To build an audit trail or change-data-capture that needs the complete row
+before and after each write, register the preupdate hook:
+
+```elixir
+{:ok, conn} = Exqlite.Sqlite3.open("app.db")
+
+:ok = Exqlite.Sqlite3.set_preupdate_hook(conn, self())
+
+:ok = Exqlite.Sqlite3.execute(conn, "insert into items (name) values ('a')")
+
+receive do
+  {:insert, "main", "items", 1, nil, [1, "a"]} -> :ok
+end
+```
+
+If you only need to know which rows changed, `set_update_hook/2` delivers
+lighter messages carrying the rowids and nothing else.
+
+To observe transaction outcomes on a connection, register the commit and
+rollback hooks; they deliver `:committed` and `:rolled_back` respectively
+when a transaction ends:
+
+```elixir
+:ok = Exqlite.Sqlite3.set_commit_hook(conn, self())
+:ok = Exqlite.Sqlite3.set_rollback_hook(conn, self())
+```
+
+Refer to `Exqlite.Sqlite3.set_preupdate_hook/2`,
+`Exqlite.Sqlite3.set_update_hook/2`, `Exqlite.Sqlite3.set_commit_hook/2`, and
+`Exqlite.Sqlite3.set_rollback_hook/2` for the exact message formats and
+restrictions — including that the commit hook is notification-only and that
+hooks are unregistered when the connection closes.
 
 ### Using SQLite3 native extensions
 
