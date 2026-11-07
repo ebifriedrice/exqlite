@@ -30,8 +30,8 @@ defmodule Exqlite.MixProject do
 
       # Docs
       name: "Exqlite",
-      source_url: "https://github.com/elixir-sqlite/exqlite",
-      homepage_url: "https://github.com/elixir-sqlite/exqlite",
+      source_url: "https://github.com/ebifriedrice/exqlite",
+      homepage_url: "https://github.com/ebifriedrice/exqlite",
       docs: docs()
     ]
   end
@@ -92,8 +92,8 @@ defmodule Exqlite.MixProject do
       name: "exqlite",
       licenses: ["MIT"],
       links: %{
-        "GitHub" => "https://github.com/elixir-sqlite/exqlite",
-        "Changelog" => "https://github.com/elixir-sqlite/exqlite/blob/main/CHANGELOG.md"
+        "GitHub" => "https://github.com/ebifriedrice/exqlite",
+        "Changelog" => "https://github.com/ebifriedrice/exqlite/blob/main/CHANGELOG.md"
       }
     ]
   end
@@ -103,7 +103,7 @@ defmodule Exqlite.MixProject do
       main: "readme",
       extras: docs_extras(),
       source_ref: "v#{@version}",
-      source_url: "https://github.com/elixir-sqlite/exqlite"
+      source_url: "https://github.com/ebifriedrice/exqlite"
     ]
   end
 
@@ -111,6 +111,7 @@ defmodule Exqlite.MixProject do
     [
       "README.md": [title: "Readme"],
       "guides/windows.md": [],
+      "C_TESTING.md": [title: "Checking the C NIF"],
       "CHANGELOG.md": []
     ]
   end
