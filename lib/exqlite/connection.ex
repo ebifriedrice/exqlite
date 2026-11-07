@@ -228,6 +228,59 @@ defmodule Exqlite.Connection do
       for a dead listener's connection are silently dropped until the
       connection reconnects.
 
+  A listener registered under its module name and started before the repo
+  is the usual shape:
+
+      defmodule MyApp.ChangeListener do
+        use GenServer
+        require Logger
+
+        def start_link(opts) do
+          GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+        end
+
+        @impl true
+        def init(opts), do: {:ok, opts}
+
+        # :preupdate_hook messages carry the complete row before and after
+        # the change
+        @impl true
+        def handle_info({action, db, table, row_id, old_row, new_row}, state)
+            when action in [:insert, :update, :delete] do
+          Logger.info("preupdate \#{action} \#{db}.\#{table} rowid=\#{row_id}")
+          {:noreply, state}
+        end
+
+        def handle_info(:committed, state) do
+          Logger.info("committed")
+          {:noreply, state}
+        end
+
+        def handle_info(:rolled_back, state) do
+          Logger.info("rolled back")
+          {:noreply, state}
+        end
+      end
+
+      defmodule MyApp.Application do
+        use Application
+
+        @impl true
+        def start(_type, _args) do
+          children = [
+            # Before the repo: pooled connections resolve MyApp.ChangeListener
+            # by name when they connect
+            MyApp.ChangeListener,
+            MyApp.Repo
+          ]
+
+          Supervisor.start_link(children,
+            strategy: :one_for_one,
+            name: MyApp.Supervisor
+          )
+        end
+      end
+
   ## Cancellation notes
 
   Exqlite exposes two low-level cancellation APIs:

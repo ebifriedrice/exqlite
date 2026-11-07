@@ -253,13 +253,65 @@ config :my_app, MyApp.Repo,
   rollback_hook: MyApp.ChangeListener
 ```
 
-The value is the listener's pid or registered name, and a named listener
-should be running when the pool starts so connections deliver events — a
-connection that starts while the name is unregistered, such as one opened by
-Mix storage tasks (`ecto.create`, `ecto.migrate`) outside the application
-tree, skips the hook with a warning. Every pooled connection notifies the
-listener and the messages do not identify their connection, so events from
-different connections in a larger pool interleave.
+The listener is any process that receives the hook messages in
+`handle_info/2`. Because each pooled connection resolves the name when it
+connects, it must be registered before the pool starts — start it before the
+repo in your supervision tree:
+
+```elixir
+defmodule MyApp.ChangeListener do
+  use GenServer
+  require Logger
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @impl true
+  def init(opts), do: {:ok, opts}
+
+  # :preupdate_hook messages carry the complete row before and after the change
+  @impl true
+  def handle_info({action, db, table, row_id, old_row, new_row}, state)
+      when action in [:insert, :update, :delete] do
+    Logger.info("preupdate #{action} #{db}.#{table} rowid=#{row_id}")
+    {:noreply, state}
+  end
+
+  def handle_info(:committed, state) do
+    Logger.info("committed")
+    {:noreply, state}
+  end
+
+  def handle_info(:rolled_back, state) do
+    Logger.info("rolled back")
+    {:noreply, state}
+  end
+end
+
+defmodule MyApp.Application do
+  use Application
+
+  @impl true
+  def start(_type, _args) do
+    children = [
+      # Before the repo: pooled connections resolve MyApp.ChangeListener by
+      # name when they connect
+      MyApp.ChangeListener,
+      MyApp.Repo
+    ]
+
+    Supervisor.start_link(children, strategy: :one_for_one, name: MyApp.Supervisor)
+  end
+end
+```
+
+The option value can also be the listener's pid directly. A connection that
+starts while the name is unregistered — such as one opened by Mix storage
+tasks (`ecto.create`, `ecto.migrate`) outside the application tree — skips
+the hook with a warning. Every pooled connection notifies the listener and
+the messages do not identify their connection, so events from different
+connections in a larger pool interleave.
 
 ### Using SQLite3 native extensions
 
