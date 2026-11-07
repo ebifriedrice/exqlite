@@ -155,10 +155,8 @@ defmodule Exqlite.Connection do
       See `Exqlite.Sqlite3.set_authorizer/2` for the list of action atoms.
     * `:update_hook` - Registers a listener for data change notifications on
       the connection. The value is the listener's pid or registered name, or
-      `nil` (default) for no hook. A named listener should be running before
-      the connection starts; a connection that starts while the name is
-      unregistered — such as one opened by Mix storage tasks outside the
-      application tree — skips the hook with a warning. See
+      `nil` (default) for no hook; see "Hook listener timing" below for when
+      the listener must be running. See
       `Exqlite.Sqlite3.set_update_hook/2` for the message format.
     * `:preupdate_hook` - Same as `:update_hook`, but messages carry the
       complete row before and after each change. See
@@ -208,6 +206,27 @@ defmodule Exqlite.Connection do
       `t:Exqlite.Connection.t/0` prepended to `args` or `nil` (default: `nil`)
 
   For more information about the options above, see [sqlite documentation][1]
+
+  ## Hook listener timing
+
+  Each `:*_hook` option resolves its listener when the connection connects:
+  a registered name is looked up with `Process.whereis/1` at that moment and
+  the resulting pid is registered with SQLite. The listener must therefore
+  be registered before the pool connects — list it before the repo (or
+  whatever owns the pool) in your supervision tree, or pass the pid
+  directly.
+
+  Consequences of the per-connection resolution:
+
+    * A connection that starts while the name is still unregistered — such
+      as one opened by Mix storage tasks (`ecto.create`, `ecto.migrate`)
+      outside the application tree — skips the hook with a warning and
+      delivers no events.
+    * A pooled connection that reconnects after the listener restarted
+      resolves the name again and notifies the new listener process.
+    * A `pid` value is registered as given, with no liveness check; events
+      for a dead listener's connection are silently dropped until the
+      connection reconnects.
 
   ## Cancellation notes
 

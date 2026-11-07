@@ -479,6 +479,10 @@ defmodule Exqlite.Sqlite3 do
       are two connections A and B. When an update happens on connection B, the
       hook set for connection A will not receive the update, but the hook for
       connection B will receive the update.
+
+  For pooled `DBConnection` connections use the `:update_hook` connection
+  option of `Exqlite.Connection` instead — a pool never hands out the raw
+  connection handle this function requires.
   """
   @spec set_update_hook(db(), pid()) :: :ok | {:error, reason()}
   def set_update_hook(conn, pid) do
@@ -507,6 +511,10 @@ defmodule Exqlite.Sqlite3 do
       connection with an open transaction does not emit notifications for the
       rollback performed by `close/1`.
 
+  For pooled `DBConnection` connections use the `:commit_hook` connection
+  option of `Exqlite.Connection` instead — a pool never hands out the raw
+  connection handle this function requires.
+
   See [`sqlite3_commit_hook`](https://www.sqlite.org/c3ref/commit_hook.html)
   for more details.
   """
@@ -531,6 +539,10 @@ defmodule Exqlite.Sqlite3 do
     * Only one pid can receive the notifications for a given connection at a
       time. If this function is called multiple times for the same connection,
       only the last pid will receive the notifications.
+
+  For pooled `DBConnection` connections use the `:rollback_hook`
+  connection option of `Exqlite.Connection` instead — a pool never hands
+  out the raw connection handle this function requires.
 
   See [`sqlite3_rollback_hook`](https://www.sqlite.org/c3ref/commit_hook.html)
   for more details.
@@ -578,6 +590,10 @@ defmodule Exqlite.Sqlite3 do
       (`EXQLITE_USE_SYSTEM=1`, unless the flag is passed via
       `EXQLITE_SYSTEM_CFLAGS`), this function returns
       `{:error, :preupdate_hook_not_supported}`.
+
+  For pooled `DBConnection` connections use the `:preupdate_hook`
+  connection option of `Exqlite.Connection` instead — a pool never hands
+  out the raw connection handle this function requires.
 
   See [`sqlite3_preupdate_hook`](https://www.sqlite.org/c3ref/preupdate_hook.html)
   for more details.
