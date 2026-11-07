@@ -51,6 +51,8 @@ defmodule Exqlite.Connection do
           before_disconnect: (Exception.t(), t -> any) | {module, atom, [any]} | nil
         }
 
+  @type hook_listener() :: pid() | atom() | nil
+
   @type journal_mode() :: :delete | :truncate | :persist | :memory | :wal | :off
   @type temp_store() :: :default | :file | :memory
   @type synchronous() :: :extra | :full | :normal | :off
@@ -81,6 +83,10 @@ defmodule Exqlite.Connection do
           | {:hard_heap_limit, integer()}
           | {:key, String.t()}
           | {:custom_pragmas, [{keyword(), integer() | boolean() | String.t()}]}
+          | {:update_hook, hook_listener()}
+          | {:preupdate_hook, hook_listener()}
+          | {:commit_hook, hook_listener()}
+          | {:rollback_hook, hook_listener()}
           | {:before_disconnect,
              (Exception.t(), t -> any) | {module, atom, [any]} | nil}
 
@@ -147,6 +153,20 @@ defmodule Exqlite.Connection do
     * `:authorizer` - A list of SQL actions to deny on the connection.
       Example: `authorizer: [:attach, :detach]`. Defaults to `[]` (no authorizer).
       See `Exqlite.Sqlite3.set_authorizer/2` for the list of action atoms.
+    * `:update_hook` - Registers a listener for data change notifications on
+      the connection. The value is the listener's pid or registered name, or
+      `nil` (default) for no hook. A named listener must be running before the
+      connection starts; a registered name that cannot be resolved fails the
+      connect. See `Exqlite.Sqlite3.set_update_hook/2` for the message format.
+    * `:preupdate_hook` - Same as `:update_hook`, but messages carry the
+      complete row before and after each change. See
+      `Exqlite.Sqlite3.set_preupdate_hook/2` for the message format.
+    * `:commit_hook` - Same as `:update_hook`, but the listener receives
+      `:committed` when a transaction commits. See
+      `Exqlite.Sqlite3.set_commit_hook/2`.
+    * `:rollback_hook` - Same as `:update_hook`, but the listener receives
+      `:rolled_back` when a transaction rolls back. See
+      `Exqlite.Sqlite3.set_rollback_hook/2`.
     * `:chunk_size` - The chunk size for bulk fetching. Defaults to `50`.
     * `:key` - Optional key to set during database initialization. This PRAGMA
       is often used to set up database level encryption.
@@ -557,13 +577,54 @@ defmodule Exqlite.Connection do
     end
   end
 
-  # Must run last in `do_connect/2`. Connection setup issues its own PRAGMA and
-  # SELECT statements, which would be rejected if the authorizer denied them.
+  # Must run after the setup statements. Connection setup issues its own PRAGMA
+  # and SELECT statements, which would be rejected if the authorizer denied them.
   defp set_authorizer(db, options) do
     case Keyword.get(options, :authorizer, []) do
       [] -> :ok
       deny_list -> Sqlite3.set_authorizer(db, deny_list)
     end
+  end
+
+  # The SQLite notification hooks fire per connection, so pooled connections
+  # can only be observed by registering the listener at connect time — the
+  # underlying db handle never leaves the connection process.
+  defp set_hooks(db, options) do
+    hooks = [
+      update_hook: &Sqlite3.set_update_hook/2,
+      preupdate_hook: &Sqlite3.set_preupdate_hook/2,
+      commit_hook: &Sqlite3.set_commit_hook/2,
+      rollback_hook: &Sqlite3.set_rollback_hook/2
+    ]
+
+    Enum.reduce_while(hooks, :ok, fn {opt, set}, :ok ->
+      case register_hook(db, set, Keyword.get(options, opt)) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp register_hook(_db, _set, nil), do: :ok
+
+  defp register_hook(db, set, target) do
+    with {:ok, pid} <- hook_listener_pid(target) do
+      set.(db, pid)
+    end
+  end
+
+  defp hook_listener_pid(pid) when is_pid(pid), do: {:ok, pid}
+
+  defp hook_listener_pid(name) when is_atom(name) do
+    case Process.whereis(name) do
+      nil -> {:error, "hook listener #{inspect(name)} is not a registered process"}
+      pid -> {:ok, pid}
+    end
+  end
+
+  defp hook_listener_pid(other) do
+    {:error,
+     "hook listener #{inspect(other)} must be a pid or a registered process name"}
   end
 
   defp load_extensions(db, options) do
@@ -614,7 +675,8 @@ defmodule Exqlite.Connection do
          :ok <- set_hard_heap_limit(db, options),
          :ok <- load_extensions(db, options),
          :ok <- deserialize(db, options),
-         :ok <- set_authorizer(db, options) do
+         :ok <- set_authorizer(db, options),
+         :ok <- set_hooks(db, options) do
       state = %__MODULE__{
         db: db,
         default_transaction_mode:

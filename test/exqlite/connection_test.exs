@@ -230,6 +230,90 @@ defmodule Exqlite.ConnectionTest do
 
       File.rm(path)
     end
+
+    test "hook options register listeners by pid and by name" do
+      path = Temp.path!()
+      test_pid = self()
+      listener = spawn_link(fn -> forward_loop(test_pid) end)
+      true = Process.register(listener, :hook_test_listener)
+
+      {:ok, state} =
+        Connection.connect(
+          database: path,
+          update_hook: listener,
+          preupdate_hook: :hook_test_listener,
+          commit_hook: :hook_test_listener,
+          rollback_hook: :hook_test_listener
+        )
+
+      :ok =
+        Sqlite3.execute(
+          state.db,
+          "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)"
+        )
+
+      :ok = Sqlite3.execute(state.db, "INSERT INTO test (name) VALUES ('a')")
+
+      assert_receive {:insert, "main", "test", 1}
+      assert_receive {:insert, "main", "test", 1, nil, [1, "a"]}
+
+      File.rm(path)
+    end
+
+    test "commit and rollback hook options notify on transaction outcomes" do
+      path = Temp.path!()
+      test_pid = self()
+      listener = spawn_link(fn -> forward_loop(test_pid) end)
+      true = Process.register(listener, :hook_test_txn_listener)
+
+      {:ok, state} =
+        Connection.connect(
+          database: path,
+          commit_hook: :hook_test_txn_listener,
+          rollback_hook: :hook_test_txn_listener
+        )
+
+      :ok = Sqlite3.execute(state.db, "CREATE TABLE test (id INTEGER)")
+
+      :ok = Sqlite3.execute(state.db, "BEGIN")
+      :ok = Sqlite3.execute(state.db, "COMMIT")
+      assert_receive :committed
+
+      :ok = Sqlite3.execute(state.db, "BEGIN")
+      :ok = Sqlite3.execute(state.db, "ROLLBACK")
+      assert_receive :rolled_back
+
+      File.rm(path)
+    end
+
+    test "hook option with an unregistered name fails the connect" do
+      path = Temp.path!()
+
+      {:error, error} =
+        Connection.connect(database: path, commit_hook: :hook_test_missing_listener)
+
+      assert error.message =~ "is not a registered process"
+
+      File.rm(path)
+    end
+
+    test "hook option with an invalid value fails the connect" do
+      path = Temp.path!()
+
+      {:error, error} = Connection.connect(database: path, update_hook: {:not, :a_pid})
+
+      assert error.message =~ "must be a pid or a registered process name"
+
+      File.rm(path)
+    end
+  end
+
+  defp forward_loop(parent) do
+    receive do
+      msg ->
+        send(parent, msg)
+        forward_loop(parent)
+    end
   end
 
   defp get_pragma(db, pragma_name) do
