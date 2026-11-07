@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- added: `:update_hook`, `:preupdate_hook`, `:commit_hook`, and `:rollback_hook` connection options, so pooled `DBConnection` / Ecto connections can deliver the SQLite notification hook messages to a listener process. `Exqlite.Sqlite3.set_*_hook/2` needs the raw connection handle, which a pool never hands out; the options register the listener — a pid or a name that is registered before the pool starts — on every pooled connection as it connects.
+- added: `:update_hook`, `:preupdate_hook`, `:commit_hook`, and `:rollback_hook` connection options, so pooled `DBConnection` / Ecto connections can deliver the SQLite notification hook messages to a listener process. `Exqlite.Sqlite3.set_*_hook/2` needs the raw connection handle, which a pool never hands out; the options register the listener — a pid or a name — on every pooled connection as it connects. A connection that starts while a named listener is unregistered (Mix storage tasks run outside the application tree) skips the hook with a warning instead of failing, so the standard Ecto workflow keeps working.
 
 ## v0.44.1
 

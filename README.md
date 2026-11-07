@@ -253,8 +253,11 @@ config :my_app, MyApp.Repo,
   rollback_hook: MyApp.ChangeListener
 ```
 
-The value is the listener's pid or registered name, and a named listener must
-already be running when the pool starts. Every pooled connection notifies the
+The value is the listener's pid or registered name, and a named listener
+should be running when the pool starts so connections deliver events — a
+connection that starts while the name is unregistered, such as one opened by
+Mix storage tasks (`ecto.create`, `ecto.migrate`) outside the application
+tree, skips the hook with a warning. Every pooled connection notifies the
 listener and the messages do not identify their connection, so events from
 different connections in a larger pool interleave.
 
