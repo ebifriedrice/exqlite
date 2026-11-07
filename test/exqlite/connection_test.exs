@@ -1,6 +1,8 @@
 defmodule Exqlite.ConnectionTest do
   use ExUnit.Case
 
+  import ExUnit.CaptureLog
+
   alias Exqlite.Connection
   alias Exqlite.Query
   alias Exqlite.Sqlite3
@@ -286,13 +288,23 @@ defmodule Exqlite.ConnectionTest do
       File.rm(path)
     end
 
-    test "hook option with an unregistered name fails the connect" do
+    test "hook option with an unregistered name skips the hook with a warning" do
       path = Temp.path!()
 
-      {:error, error} =
-        Connection.connect(database: path, commit_hook: :hook_test_missing_listener)
+      assert capture_log(fn ->
+               {:ok, state} =
+                 Connection.connect(
+                   database: path,
+                   commit_hook: :hook_test_missing_listener
+                 )
 
-      assert error.message =~ "is not a registered process"
+               assert state.db
+
+               # No listener was registered, so a commit delivers nothing
+               :ok = Sqlite3.execute(state.db, "BEGIN")
+               :ok = Sqlite3.execute(state.db, "COMMIT")
+               refute_receive :committed
+             end) =~ "is not a registered process"
 
       File.rm(path)
     end

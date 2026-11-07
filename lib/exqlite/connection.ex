@@ -155,9 +155,11 @@ defmodule Exqlite.Connection do
       See `Exqlite.Sqlite3.set_authorizer/2` for the list of action atoms.
     * `:update_hook` - Registers a listener for data change notifications on
       the connection. The value is the listener's pid or registered name, or
-      `nil` (default) for no hook. A named listener must be running before the
-      connection starts; a registered name that cannot be resolved fails the
-      connect. See `Exqlite.Sqlite3.set_update_hook/2` for the message format.
+      `nil` (default) for no hook. A named listener should be running before
+      the connection starts; a connection that starts while the name is
+      unregistered — such as one opened by Mix storage tasks outside the
+      application tree — skips the hook with a warning. See
+      `Exqlite.Sqlite3.set_update_hook/2` for the message format.
     * `:preupdate_hook` - Same as `:update_hook`, but messages carry the
       complete row before and after each change. See
       `Exqlite.Sqlite3.set_preupdate_hook/2` for the message format.
@@ -608,17 +610,31 @@ defmodule Exqlite.Connection do
   defp register_hook(_db, _set, nil), do: :ok
 
   defp register_hook(db, set, target) do
-    with {:ok, pid} <- hook_listener_pid(target) do
-      set.(db, pid)
+    case hook_listener_pid(target) do
+      {:ok, pid} -> set.(db, pid)
+      :skip -> :ok
+      {:error, _reason} = error -> error
     end
   end
 
   defp hook_listener_pid(pid) when is_pid(pid), do: {:ok, pid}
 
+  # An unregistered name is a connection made outside the listener's
+  # lifetime — Mix storage tasks (ecto.create, ecto.migrate) connect before
+  # any application tree exists. Skipping with a warning lets those through;
+  # warning instead of failing keeps the standard Ecto workflow usable.
   defp hook_listener_pid(name) when is_atom(name) do
     case Process.whereis(name) do
-      nil -> {:error, "hook listener #{inspect(name)} is not a registered process"}
-      pid -> {:ok, pid}
+      nil ->
+        Logger.warning(
+          "hook listener #{inspect(name)} is not a registered process; " <>
+            "skipping hook registration for this connection"
+        )
+
+        :skip
+
+      pid ->
+        {:ok, pid}
     end
   end
 
