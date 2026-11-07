@@ -239,6 +239,25 @@ Refer to `Exqlite.Sqlite3.set_preupdate_hook/2`,
 restrictions — including that the commit hook is notification-only and that
 hooks are unregistered when the connection closes.
 
+The functions above need the raw connection handle, which pooled
+`DBConnection` connections — and therefore Ecto — never hand out. To observe
+writes made through a pool, set the `:update_hook`, `:preupdate_hook`,
+`:commit_hook`, and `:rollback_hook` connection options instead; each pooled
+connection registers the listener when it connects:
+
+```elixir
+config :my_app, MyApp.Repo,
+  database: "app.db",
+  preupdate_hook: MyApp.ChangeListener,
+  commit_hook: MyApp.ChangeListener,
+  rollback_hook: MyApp.ChangeListener
+```
+
+The value is the listener's pid or registered name, and a named listener must
+already be running when the pool starts. Every pooled connection notifies the
+listener and the messages do not identify their connection, so events from
+different connections in a larger pool interleave.
+
 ### Using SQLite3 native extensions
 
 Exqlite supports loading [run-time loadable SQLite3 extensions](https://www.sqlite.org/loadext.html).
