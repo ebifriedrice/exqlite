@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.44.1
+
+- fixed: Windows NIFs are built with `SQLITE_ENABLE_PREUPDATE_HOOK`, matching the other platforms.
+- fixed: macOS precompiles run on `macos-15` runners; the retired `macos-14` arm64 image had cancelled every macOS build job on this repository.
+- changed: This repository is consumed as a git dependency and is not published to hex.pm. The readme shows the git dependency setup and documents the preupdate, commit, and rollback notification hooks.
+
 ## v0.44.0
 
 - added: `Exqlite.Sqlite3.set_commit_hook/2` and `Exqlite.Sqlite3.set_rollback_hook/2` to receive `:committed` / `:rolled_back` notifications for a connection's transactions.
@@ -99,7 +105,7 @@
 
 ## v0.29.0
 
-- changed: Removed `Exqlite.bind/3`, please use `bind/2` instead.
+- changed: Removed the `bind/3` function, please use `bind/2` instead.
 - changed: Improved multi-threaded access to underlying sqlite resource.
 - changed: Document issue with calling `close/1` immediately after calling
   `interrupt/1`. If you encounter the issue where the entire BEAM crashes, put
